@@ -1,5 +1,6 @@
 import os
 import time
+
 import numpy as np
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QFileDialog, QApplication
 #matplot绘图库
@@ -8,9 +9,9 @@ import matplotlib.pyplot as plt
 from ui_maingui import Ui_MainWindow
 import function_dataanalysis
 import communicate_threadset
-#import drawing_threadset
 import serialset
 import initial_params
+import pid_control
 
 
 #ui界面设置类
@@ -60,15 +61,35 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
         self.zero_params = self.init_params_opter.configRead(self.init_path)
         for i in range(8):
             self.zero_param_shows[i].setValue(self.zero_params[i])
-            
+
+        #自动加热线程
+        self.main_temperature = 0
+        self.controler = pid_control.TemperaturController()
+        self.controler.thread_sts_signal.connect(
+            self.recall_auto_process_sts)  #连接线程状态信号
+        self.controler.current_temperature_signal.connect(
+            self.return_temperature)  #连接实时温度信号
+
+    def return_temperature(self, sign_type: int):
+        self.controler.set_current_point(self.main_temperature)
+
+    def auto_process(self):
+        self.controler.start()  #启动线程
+
+    def recall_auto_process_sts(self, run_sts: int):
+        print(run_sts)
 
     def toolSet(self):
         self.pushButton_22.clicked.connect(self.sercomSet)  #串口连接
         self.pushButton_7.clicked.connect(self.sersearch)  #可用串口查询
         self.pushButton_27.clicked.connect(self.recordOpt)  #开始记录
         self.pushButton_28.clicked.connect(self.csvfileSave)  #保存记录
-        self.pushButton.clicked.connect(self.drawing_thread)  #动态绘图
+        self.pushButton_30.clicked.connect(self.opend_folder)  #打开保存文件夹
+        self.pushButton.clicked.connect(self.dynamic_drawing)  #动态绘图
+        self.pushButton_3.clicked.connect(self.handle_drawing)  #手动绘图
         self.pushButton_2.clicked.connect(self.zero_params_set)  #修改零点偏移参数
+        self.pushButton_4.clicked.connect(self.auto_process)  #自动温控 启动
+        self.pushButton_5.clicked.connect(lambda x: self.controler.set_quit())  #自动温控 终止
 
     def threadsts(self, finish_way: int):
         '''
@@ -83,15 +104,60 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
             self.statusBar.showMessage('串口连接失败', 5000)
             self.pushButton_22.setText('连接')
 
-    def drawing_thread(self):
+    def opend_folder(self):
+        folder_path = self.lineEdit.text()
+        if os.path.exists(folder_path):
+            os.startfile(folder_path)
+        else:
+            self.statusBar.showMessage('目标路径不存在', 5000)
+
+    def handle_drawing(self):
+        file_path = QFileDialog.getOpenFileName(self, "选择文件", "",
+                                                "CSV文件(*.csv)")[0]
+        if file_path:
+            print(file_path)
+            with open(file_path, 'r') as f:
+                text = f.read()
+            try:
+                lines = text.split('\n')
+                if len(lines) > 5:
+                    lines.pop(0)
+                    lines.pop()
+                    for index, line in enumerate(lines):
+                        lines[index] = list(map(float, line.split(',')))
+                    lines_arr = np.array(lines)
+                    colors = ['r', 'g', 'b', 'y', 'm', 'c', 'orange', 'yellow']
+                    linestyles = ['-', '-', '-', '-', '-', '-', '-', '-']
+                    #markers = ['.', '.', '.', '.', '.', '.', '.', '.']
+                    sttime = lines[0][0]
+                    timeArray = time.localtime(int(sttime))
+                    show_date = time.strftime("%Y-%m-%d %H:%M:%S", timeArray)
+                    for i in range(1, len(lines[0])):
+                        if lines_arr[0, i] == 0:
+                            continue
+                        plt.plot(lines_arr[:, 0] - sttime,
+                                 lines_arr[:, i],
+                                 color=colors[i - 1],
+                                 linestyle=linestyles[i - 1],
+                                 label='input' + str(i))
+                    plt.title("handle_drawing")  #设置标题
+                    plt.legend()
+                    plt.xlabel('time(s) stTime: ' + show_date)
+                    plt.ylabel('temperature(°)')
+                    plt.show()
+            except Exception as e:
+                print(e)
+
+    def dynamic_drawing(self):
         if self.is_showed == False:
             self.is_showed = True
             self.pushButton.setText('关闭动态绘图')
             colors = ['r', 'g', 'b', 'y', 'm', 'c', 'orange', 'yellow']
             linestyles = ['-', '-', '-', '-', '-', '-', '-', '-']
-            markers = ['.', '.', '.', '.', '.', '.', '.', '.']
-            plt.title("figure")  #设置标题
+            #markers = ['.', '.', '.', '.', '.', '.', '.', '.']
             #如果动态绘图有效则发送数据
+            timeArray = time.localtime(int(self.sttime))
+            show_date = time.strftime("%Y-%m-%d %H:%M:%S", timeArray)
             while True:
                 if self.record_data_num > 0:
                     all_data = np.array(self.record_data_list)
@@ -103,10 +169,10 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
                                  all_data[:, i],
                                  color=colors[i - 1],
                                  linestyle=linestyles[i - 1],
-                                 marker=markers[i - 1],
                                  label='input' + str(i))
+                    plt.title("dynamic_drawing")  #设置标题
                     plt.legend()
-                    plt.xlabel('time(s)')
+                    plt.xlabel('time(s) stTime: ' + show_date)
                     plt.ylabel('temperature(°)')
                     plt.pause(2)
                     plt.cla()
@@ -153,19 +219,16 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
         params = []
         for i in range(8):
             params.append(self.zero_param_shows[i].value())
-        res = self.init_params_opter.configWrite(self.init_path,params)
+        res = self.init_params_opter.configWrite(self.init_path, params)
         #重新读取参数
         self.zero_params = self.init_params_opter.configRead(self.init_path)
         for i in range(8):
             self.zero_param_shows[i].setValue(self.zero_params[i])
-        
+
         if res:
             self.statusBar.showMessage('参数修改成功', 5000)
         else:
             self.statusBar.showMessage('参数修改失败', 5000)
-            
-            
-            
 
     def sersearch(self):
         '''
@@ -174,9 +237,7 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
         serial_str = serialset.serialsearch()
         self.textBrowser.setText(serial_str)
 
-
-#数据回调函数
-
+    #数据回调函数
     def callBack(self, data: list):
         '''
     串口通信线程 每当串口通信线程内的数据获得更新时 
@@ -190,14 +251,18 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
             else:
                 self.temperature_shows[i].setText('----')
 
+        #设置当前主温度
+        self.main_temperature = data[1]
+
         #如果记录标识符为True
         if self.record_flag == True:
             self.record_data_list.append(data)
             self.record_data_num += 1
             #自动记录（每5分钟保存一次）
-            if (self.record_data_num+1) % 300== 0:
-                csv_save_fullpath = function_dataanalysis.csvAutoSave(self.lineEdit.text(), self.record_data_list)
-    
+            if (self.record_data_num + 1) % 300 == 0:
+                csv_save_fullpath = function_dataanalysis.csvAutoSave(
+                    self.lineEdit.text(), self.record_data_list)
+
             if self.record_data_num > 200000:
                 self.statusBar.showMessage('记录数据量超过200000组,自动结束记录', 5000)
                 self.recordOpt()
