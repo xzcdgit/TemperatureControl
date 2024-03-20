@@ -44,7 +44,7 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
                 self.lineEdit_2.setText(tmps[0])
                 break
 
-        self.record_flag = False  #记录标识符
+        self.is_recording = False  #记录标识符
         self.record_data_num = 0  #记录数据量统计
         self.is_showed = False  #绘图线程创建标识符
         self.record_data_list = []
@@ -89,7 +89,8 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
         self.pushButton_3.clicked.connect(self.handle_drawing)  #手动绘图
         self.pushButton_2.clicked.connect(self.zero_params_set)  #修改零点偏移参数
         self.pushButton_4.clicked.connect(self.auto_process)  #自动温控 启动
-        self.pushButton_5.clicked.connect(lambda x: self.controler.set_quit())  #自动温控 终止
+        self.pushButton_5.clicked.connect(
+            lambda x: self.controler.set_quit())  #自动温控 终止
 
     def threadsts(self, finish_way: int):
         '''
@@ -115,14 +116,13 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
         file_path = QFileDialog.getOpenFileName(self, "选择文件", "",
                                                 "CSV文件(*.csv)")[0]
         if file_path:
-            print(file_path)
             with open(file_path, 'r') as f:
                 text = f.read()
             try:
                 lines = text.split('\n')
-                if len(lines) > 5:
-                    lines.pop(0)
-                    lines.pop()
+                if len(lines) > 3:
+                    lines.pop(0)  #去除标题
+                    lines.pop()  #去除结尾的换行符
                     for index, line in enumerate(lines):
                         lines[index] = list(map(float, line.split(',')))
                     lines_arr = np.array(lines)
@@ -146,7 +146,7 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
                     plt.ylabel('temperature(°)')
                     plt.show()
             except Exception as e:
-                print(e)
+                self.statusBar.showMessage('目标数据非法', 5000)
 
     def dynamic_drawing(self):
         if self.is_showed == False:
@@ -184,9 +184,9 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
                     self.is_showed = False
                     self.pushButton.setText('启动动态绘图')
                     break
-
         else:
             self.is_showed = False
+            self.pushButton.setText('启动动态绘图')
 
     def sercomSet(self):
         '''
@@ -255,7 +255,7 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
         self.main_temperature = data[1]
 
         #如果记录标识符为True
-        if self.record_flag == True:
+        if self.is_recording == True:
             self.record_data_list.append(data)
             self.record_data_num += 1
             #自动记录（每5分钟保存一次）
@@ -264,28 +264,29 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
                     self.lineEdit.text(), self.record_data_list)
 
             if self.record_data_num > 200000:
+                self.recordOpt()  #调用数据记录函数，自动结束记录
                 self.statusBar.showMessage('记录数据量超过200000组,自动结束记录', 5000)
-                self.recordOpt()
-                self.record_data_num = 0
-        else:
-            self.record_data_num = 0
+
+    def reset_record_data(self):
+        self.record_data_num = 0
+        self.record_data_list = []  #重置记录的数据
 
     def recordOpt(self):
         '''
     数据记录槽函数
     根据按键文件 调用该函数后 改变 数据记录标识符 
     '''
-        if self.pushButton_27.text() == '开始记录':
+        if self.is_recording == False:
+            self.reset_record_data()  #重新记录 重置已经记录的数据
+            self.is_recording = True
             self.pushButton_27.setText('完成记录')
             self.statusBar.showMessage('正在记录...', 5000)
-            self.record_data_list = []
-            self.record_flag = True
             self.sttime = time.time()
         else:
-            self.record_flag = False
+            self.is_recording = False
             self.pushButton_27.setText('开始记录')
             self.statusBar.showMessage('完成记录', 5000)
-            self.csvfileSave()
+            self.csvfileSave()  #自动进行一次提示保存的操作
 
     def savefolderOpen(self):
         '''
@@ -320,6 +321,7 @@ class MyMainWindow(QMainWindow, Ui_MainWindow):
                                      QMessageBox.Yes | QMessageBox.No,
                                      QMessageBox.No)
         if reply == QMessageBox.Yes:
+            plt.close('all')
             event.accept()
         else:
             event.ignore()
